@@ -35,7 +35,7 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(tarefa_u4c8 tarefa_u4c8.c inc/ssd1306_i2c.c)
+add_executable(tarefa_u4c8 tarefa_u4c8.c inc/ssd1306.c src/init.c src/functions.c)
 
 pico_set_program_name(tarefa_u4c8 "tarefa_u4c8")
 pico_set_program_version(tarefa_u4c8 "0.1")

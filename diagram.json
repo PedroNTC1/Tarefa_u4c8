@@ -1,6 +1,6 @@
 {
     "version": 1,
-    "author": "Reinan Lopes Argolo",
+    "author": "Pedro Sérgio Martins Lima",
     "editor": "wokwi",
     "parts": [
       { "type": "wokwi-pi-pico", "id": "pico", "top": 140.85, "left": 22.8, "attrs": {} },

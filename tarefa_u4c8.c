@@ -1,145 +1,215 @@
-#include <stdio.h>             
-#include "pico/stdlib.h"      
-#include "hardware/adc.h"      
-#include "hardware/pwm.h"  
+#include <stdio.h>
+#include "pico/stdlib.h"
 #include "hardware/gpio.h"
-#include "hardware/i2c.h"    
+#include "hardware/i2c.h"
+#include "src/init.h" 
+#include "src/functions.h"
+#include <stdlib.h>  // for abs
 
-#define VRX_PIN 26 
-#define VRY_PIN 27   
-#define SW_PIN 22     
-#define LED_BLUE_PIN 12  
-#define LED_GREEN_PIN 11
-#define LED_RED_PIN 13 
-#define BUTTON_A_PIN 5
-#define BUTTON_B_PIN 6   
+ssd1306_t ssd;
 
-// Parâmetros para debounce
-#define DEBOUNCE_DELAY_MS 50
 
-// Variáveis para armazenar o estado dos botões
-bool button_a_state = false;
-bool button_b_state = false;
-
-// Função para inicializar o PWM
-uint pwm_init_gpio(uint gpio, uint wrap) {
-    gpio_set_function(gpio, GPIO_FUNC_PWM);
-    uint slice_num = pwm_gpio_to_slice_num(gpio);
-    pwm_set_wrap(slice_num, wrap);
-    pwm_set_enabled(slice_num, false);
-    return slice_num;
-}
-
-// Função para verificar o debounce de um botão
-bool debounce(uint pin, bool *last_state) {
-    static uint32_t last_time = 0;
-    uint32_t current_time = to_ms_since_boot(get_absolute_time());
-    bool current_state = gpio_get(pin) == 0; // 0 indica que o botão está pressionado (ativo em nível baixo)
-
-    if (current_state != *last_state) {
-        if (current_time - last_time > DEBOUNCE_DELAY_MS) {
-            last_time = current_time;
-            *last_state = current_state;
-            return current_state;
-        }
-    }
-    return *last_state;
-}
-
-int main() {
-    // Inicializa a comunicação serial para permitir o uso de printf
+int main()
+{
     stdio_init_all();
 
-    // Inicializa o módulo ADC do Raspberry Pi Pico
-    adc_init();
-    adc_gpio_init(VRX_PIN); // Configura GP26 (ADC0) para o eixo X do joystick
-    adc_gpio_init(VRY_PIN); // Configura GP27 (ADC1) para o eixo Y do joystick
+    // Inicializa o LCD
+    init_i2c(&ssd);
+    ssd1306_fill(&ssd, false);
+    ssd1306_send_data(&ssd);
 
-    // Configura o pino do botão do joystick como entrada digital com pull-up interno
-    gpio_init(SW_PIN);
-    gpio_set_dir(SW_PIN, GPIO_IN);
-    gpio_pull_up(SW_PIN); // Habilita o pull-up interno para garantir leitura estável
+    // Inicializa o ADC
+    adc_start();
 
-    // Configura os botões A e B como entrada digital com pull-up interno
-    gpio_init(BUTTON_A_PIN);
-    gpio_set_dir(BUTTON_A_PIN, GPIO_IN);
-    gpio_pull_up(BUTTON_A_PIN); // Habilita o pull-up interno para garantir leitura estável
+    pwm_init_gpio(LED_BLUE_PIN, 4096);
+    pwm_init_gpio(LED_RED_PIN, 4096);  // added: initialize red LED PWM
+    pwm_init_gpio(LED_GREEN_PIN, 4096);
 
-    gpio_init(BUTTON_B_PIN);
-    gpio_set_dir(BUTTON_B_PIN, GPIO_IN);
-    gpio_pull_up(BUTTON_B_PIN); // Habilita o pull-up interno para garantir leitura estável
+    int ledToggle = 0; // persistent toggle state for LED_RED
+    bool override = false;
+    uint16_t last_joystick_x = 0;
 
-    // Inicializa os pinos dos LEDs como saída e desliga-os inicialmente
-    gpio_init(LED_BLUE_PIN);
-    gpio_set_dir(LED_BLUE_PIN, GPIO_OUT);
-    gpio_put(LED_BLUE_PIN, false);
+    // New variables for LED_BLUE
+    int ledToggleBlue = 0;
+    bool overrideBlue = false;
+    uint16_t last_joystick_y = 0;
 
-    gpio_init(LED_GREEN_PIN);
-    gpio_set_dir(LED_GREEN_PIN, GPIO_OUT);
-    gpio_put(LED_GREEN_PIN, false);
+    // Track if LED is controlled by joystick
+    bool wasJoystickRed = true;
+    bool wasJoystickBlue = true;
 
-    // Inicializa o PWM para os LEDs azul e verde
-    uint pwm_wrap = 4096;
-    uint blue_pwm_slice = pwm_init_gpio(LED_BLUE_PIN, pwm_wrap);
-    uint green_pwm_slice = pwm_init_gpio(LED_GREEN_PIN, pwm_wrap);
+    // New variables for border & green LED toggle via joystick button (GPIO22)
+    bool greenToggle = false;
+    int borderIndex = 0;
 
-    uint32_t last_print_time = 0; // Variável para controlar o tempo de impressão na serial
+    // Add new flag variable for manual override
+    bool manualOverrideActive = false;
 
-    while (true) {
-        // Leitura do valor do ADC para VRX (Eixo X do joystick)
-        adc_select_input(0); // Seleciona canal 0 (GP26 - VRX)
-        uint16_t vrx_value = adc_read(); // Lê o valor do eixo X, de 0 a 4095
+    // Add new variable for button-controlled LED state
+    bool manualLEDOn = false;
 
-        // Leitura do valor do ADC para VRY (Eixo Y do joystick)
-        adc_select_input(1); // Seleciona canal 1 (GP27 - VRY)
-        uint16_t vry_value = adc_read(); // Lê o valor do eixo Y, de 0 a 4095
+    // NEW: Variables to track current LED states (0 means off)
+    int currentRed = 0, currentBlue = 0;
 
-        // Leitura do estado do botão do joystick (SW)
-        bool sw_value = gpio_get(SW_PIN) == 0; // 0 indica que o botão está pressionado
+    // Inicializa o botão A apenas uma vez
+    gpio_init(B1_PIN);
+    gpio_set_dir(B1_PIN, GPIO_IN);
+    gpio_pull_up(B1_PIN);
 
-        // Verifica o estado dos botões com debounce
-        bool button_a_pressed = debounce(BUTTON_A_PIN, &button_a_state); // Verifica se o botão A foi pressionado com debounce
-        bool button_b_pressed = debounce(BUTTON_B_PIN, &button_b_state); // Verifica se o botão B foi pressionado com debounce
+    // Initialize POT_PIN (used for green LED toggle) to avoid floating state
+    gpio_init(POT_PIN);
+    gpio_set_dir(POT_PIN, GPIO_IN);
+    gpio_pull_up(POT_PIN);
 
-        // Controle do LED azul com PWM baseado no valor do ADC0 (VRX) se o botão A estiver pressionado
-        if (button_a_pressed) {
-            pwm_set_gpio_level(LED_BLUE_PIN, vrx_value); // Ajusta o duty cycle do LED azul
-            pwm_set_enabled(blue_pwm_slice, true); // Ativa o PWM do LED azul
+   uint32_t last_print_time = 0;
+
+   float led_intensity_y = 0;
+   float led_intensity_x = 0;
+
+   int square_x = 0;
+   int square_y = 0;
+   
+    while (1) {
+        // Process joystick Y (for LED_BLUE)
+        adc_select_input(0);
+        uint16_t ex_y = adc_read();
+        printf("Y: %d\n", ex_y);
+        joystick_define_intensity(&led_intensity_y, ex_y);
+                
+        // Cancel blue override if joystick Y changed significantly
+        if (abs((int)ex_y - (int)last_joystick_y) > 50) {
+            overrideBlue = false;
+        }
+        last_joystick_y = ex_y;
+
+        // Atualiza LED azul via joystick se não estiver em override
+        if (!overrideBlue) {
+            pwm_set_gpio_level(LED_BLUE_PIN, led_intensity_y);
+            currentBlue = led_intensity_y;
+            wasJoystickBlue = true;
         }
 
-        // Controle do LED verde com PWM baseado no valor do ADC1 (VRY) se o botão B estiver pressionado
-        if (button_b_pressed) {
-            pwm_set_gpio_level(LED_GREEN_PIN, vry_value); // Ajusta o duty cycle do LED verde
-            pwm_set_enabled(green_pwm_slice, true); // Ativa o PWM do LED verde
+        // Atualiza LED azul via joystick se não estiver em override
+        if (!overrideBlue) {
+            pwm_set_gpio_level(LED_BLUE_PIN, led_intensity_y);
+            wasJoystickBlue = true;
         }
 
-        // Se nenhum botão estiver pressionado, desativa os PWMs
-        if (!button_a_pressed) {
-            pwm_set_gpio_level(LED_BLUE_PIN, 0); // Define o duty cycle como 0
-            pwm_set_enabled(blue_pwm_slice, false); // Desativa o PWM do LED azul
+        // Process joystick X (for LED_RED)
+        adc_select_input(1);
+        uint16_t ex_x = adc_read();
+        printf("X: %d\n", ex_x);
+        joystick_define_intensity(&led_intensity_x, ex_x);
+
+        // Cancel override for red LED if joystick X changed significantly
+        if (abs((int)ex_x - (int)last_joystick_x) > 50) {
+            override = false;
         }
-        
-        if (!button_b_pressed) {
-            pwm_set_gpio_level(LED_GREEN_PIN, 0); // Define o duty cycle como 0
-            pwm_set_enabled(green_pwm_slice, false); // Desativa o PWM do LED verde
+        last_joystick_x = ex_x;
+
+        // Atualiza LED vermelho via joystick se não estiver em override
+        if (!override) {
+            pwm_set_gpio_level(LED_RED_PIN, led_intensity_x);
+            currentRed = led_intensity_x;
+            wasJoystickRed = true;
         }
 
-        // Calcula o duty cycle em porcentagem para impressão
-        float blue_duty_cycle = (vrx_value / 4095.0) * 100;
-        float green_duty_cycle = (vry_value / 4095.0) * 100;
+        // Limpa o quadrado anterior
+        ssd1306_square(&ssd, square_x, square_y, 8, false, true);
 
-        // Imprime os valores lidos e o duty cycle proporcional na comunicação serial a cada 1 segundo
+        // Move o quadrado
+        update_position(ex_x, ex_y, &square_x, &square_y);
+
+        // Renderiza e envia o quadrado
+        ssd1306_square(&ssd, square_x, square_y, 8, true, true);
+        ssd1306_send_data(&ssd);
+
+        wasJoystickRed = true;
+    
+
+    // Limpa o quadrado anterior
+    ssd1306_square(&ssd, square_x, square_y, 8, false, true);
+
+    // Move o quadrado
+    update_position(ex_x, ex_y, &square_x, &square_y);
+
+    // chama a função para renderizar e enviar o quadrado
+    ssd1306_square(&ssd, square_x, square_y, 8, true, true);
+    ssd1306_send_data(&ssd);
+
+
+       // 
+
+        float duty_cycle = ((float)led_intensity_x / 4095)*100;
+
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
-        if (current_time - last_print_time >= 1000) {
-            printf("VRX: %u, VRY: %u, SW: %d\n", vrx_value, vry_value, sw_value);
-            printf("Button A: %s, Button B: %s\n", button_a_pressed ? "Pressed" : "Released", button_b_pressed ? "Pressed" : "Released");
-            printf("Duty Cycle LED Azul: %.2f%%, Duty Cycle LED Verde: %.2f%%\n", blue_duty_cycle, green_duty_cycle);
-            last_print_time = current_time; // Atualiza o tempo da última impressão
+
+        if (current_time - last_print_time > 1000)
+        {
+            printf("Duty Cycle: %.2f\n", duty_cycle);
+            last_print_time = current_time;
+           
         }
 
-        // Introduz um atraso de 100 milissegundos antes de repetir a leitura
+        // Use apenas o check:
+        // Botão B1: botão sempre alterna o estado dos LEDs ignorando o valor do joystick
+        if (gpio_get(B1_PIN) == 0) {
+            sleep_ms(10);  // debounce inicial
+            if (gpio_get(B1_PIN) == 0) {
+                override = true;
+                overrideBlue = true;
+                if (currentRed == 0 && currentBlue == 0) {
+                    // Se estar apagado, força ligar os LEDs com intensidade máxima
+                    manualLEDOn = true;
+                    currentRed = 4095; currentBlue = 4095;
+                    pwm_set_gpio_level(LED_RED_PIN, 4095);
+                    pwm_set_gpio_level(LED_BLUE_PIN, 4095);
+                } else {
+                    // Se estiver ligado (por joystick ou manual), força desligar
+                    manualLEDOn = false;
+                    currentRed = 0; currentBlue = 0;
+                    pwm_set_gpio_level(LED_RED_PIN, 0);
+                    pwm_set_gpio_level(LED_BLUE_PIN, 0);
+                }
+                sleep_ms(200); // debounce final
+            }
+        }
+
+        // Nova verificação para o botão do JoyStick (GPIO22)
+        if (gpio_get(POT_PIN) == 0) {
+            sleep_ms(10);  // debounce inicial
+            if (gpio_get(POT_PIN) == 0) {
+                greenToggle = !greenToggle;
+                borderIndex = (borderIndex + 1) % 3;
+                pwm_set_gpio_level(LED_GREEN_PIN, greenToggle ? 4095 : 0);
+                sleep_ms(200); // debounce final
+            }
+        }
+
+        // Se o LED verde estiver ativo, desenha a borda conforme o estilo
+        if (greenToggle) {
+            switch(borderIndex) {
+                case 0:
+                    // Borda ocupando toda a tela
+                    ssd1306_rect(&ssd, 0, 0, WIDTH, HEIGHT, true, false);
+                    break;
+                case 1:
+                    // Borda com margem de 2 pixels
+                    ssd1306_rect(&ssd, 2, 2, WIDTH - 4, HEIGHT - 4, true, false);
+                    break;
+                case 2:
+                    // Borda com margem de 4 pixels
+                    ssd1306_rect(&ssd, 4, 4, WIDTH - 8, HEIGHT - 8, true, false);
+                    break;
+                default:
+                    break;
+            }
+            ssd1306_send_data(&ssd);
+        }
+
+        printf("end\n");
         sleep_ms(100);
-    }
+    } 
 
     return 0;
 }
