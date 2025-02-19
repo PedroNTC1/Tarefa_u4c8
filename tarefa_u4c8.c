@@ -70,11 +70,13 @@ int main()
    int square_y = 0;
    
     while (1) {
-        // Process joystick Y (for LED_BLUE)
+        
+
+        // Process joystick X (for LED_RED)
         adc_select_input(0);
         uint16_t ex_y = adc_read();
-        printf("Y: %d\n", ex_y);
-        joystick_define_intensity(&led_intensity_y, ex_y);
+        printf("X: %d\n", ex_y);
+        joystick_define_intensity(&led_intensity_x, ex_y);
                 
         // Cancel blue override if joystick Y changed significantly
         if (abs((int)ex_y - (int)last_joystick_y) > 50) {
@@ -95,11 +97,11 @@ int main()
             wasJoystickBlue = true;
         }
 
-        // Process joystick X (for LED_RED)
+        // Process joystick Y (for LED_BLUE)
         adc_select_input(1);
         uint16_t ex_x = adc_read();
-        printf("X: %d\n", ex_x);
-        joystick_define_intensity(&led_intensity_x, ex_x);
+        printf("Y: %d\n", ex_x);
+        joystick_define_intensity(&led_intensity_y, ex_x);
 
         // Cancel override for red LED if joystick X changed significantly
         if (abs((int)ex_x - (int)last_joystick_x) > 50) {

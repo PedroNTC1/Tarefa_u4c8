@@ -42,13 +42,13 @@ void update_position(uint16_t x_value, uint16_t y_value, int* x_pos, int* y_pos)
         return;
     }
 
-    if (error_x > threshold_x && *x_pos < 127) {
+    if (error_x > threshold_x && *x_pos < 50) {
         (*x_pos)++;
     } else if (error_x < -threshold_x && *x_pos > 0) {
         (*x_pos)--;
     }
 
-    if (error_y > threshold_y && *y_pos < 63) {
+    if (error_y > threshold_y && *y_pos < 120) {
         (*y_pos)++;
     } else if (error_y < -threshold_y && *y_pos > 0) {
         (*y_pos)--;
